@@ -63,26 +63,44 @@ export async function streamChat(opts: StreamOptions): Promise<{ ok: boolean; er
 // Robustly extract a JSON object from an LLM text response that may include
 // surrounding prose, markdown fences, trailing commas, or truncation.
 export function extractJson<T = unknown>(text: string): T | null {
-  if (!text || !text.trim()) return null;
+  if (!text || !text.trim()) {
+    console.error('extractJson: Empty or null text provided');
+    return null;
+  }
+  
   let cleaned = text.replace(/```json/gi, '').replace(/```/g, '').trim();
+  
+  // Log the cleaned text for debugging
+  console.log('extractJson: Attempting to parse:', cleaned.substring(0, 200) + (cleaned.length > 200 ? '...' : ''));
 
   // Find first { and last }
   const start = cleaned.indexOf('{');
   const end = cleaned.lastIndexOf('}');
-  if (start === -1) return null;
+  
+  if (start === -1) {
+    console.error('extractJson: No opening brace found in response');
+    console.error('Full response:', cleaned);
+    return null;
+  }
 
   // If we have both braces, try the full slice first
   if (end > start) {
     const slice = cleaned.slice(start, end + 1);
     const result = tryParse<T>(slice);
-    if (result !== null) return result;
+    if (result !== null) {
+      console.log('extractJson: Successfully parsed full JSON slice');
+      return result;
+    }
   }
 
   // Try progressively smaller slices from the end
   for (let i = cleaned.length; i > start; i--) {
     const slice = cleaned.slice(start, i);
     const result = tryParse<T>(slice);
-    if (result !== null) return result;
+    if (result !== null) {
+      console.log(`extractJson: Successfully parsed JSON slice at position ${i}`);
+      return result;
+    }
   }
 
   // Last resort: the JSON may be truncated (missing closing braces).
@@ -91,9 +109,14 @@ export function extractJson<T = unknown>(text: string): T | null {
   const repaired = repairJson(truncated);
   if (repaired) {
     const result = tryParse<T>(repaired);
-    if (result !== null) return result;
+    if (result !== null) {
+      console.log('extractJson: Successfully parsed repaired JSON');
+      return result;
+    }
   }
 
+  console.error('extractJson: Failed to parse JSON from response');
+  console.error('Full response:', cleaned);
   return null;
 }
 

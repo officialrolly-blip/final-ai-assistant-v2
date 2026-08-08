@@ -50,8 +50,16 @@ export default function AnalyzePage() {
       onToken: (c) => { raw += c; },
     });
     if (!res.ok) { setError(res.error ?? 'Analysis failed'); setLoading(null); return; }
+    
+    // Log the raw response for debugging
+    console.log('Raw AI response for analysis:', raw.substring(0, 500) + (raw.length > 500 ? '...' : ''));
+    
     const parsed = extractJson<ResumeAnalysis>(raw);
-    if (!parsed) { setError('Could not parse AI response. Try again.'); setLoading(null); return; }
+    if (!parsed) { 
+      setError('Could not parse AI response. The AI model returned invalid format. Please try again or switch to a different model in settings.'); 
+      setLoading(null); 
+      return; 
+    }
     setAnalysis(parsed);
     setLoading(null);
     toast.success('Resume analysis complete');
@@ -71,8 +79,16 @@ export default function AnalyzePage() {
       onToken: (c) => { raw += c; },
     });
     if (!res.ok) { setError(res.error ?? 'Prep failed'); setLoading(null); return; }
+    
+    // Log the raw response for debugging
+    console.log('Raw AI response for prep:', raw.substring(0, 500) + (raw.length > 500 ? '...' : ''));
+    
     const parsed = extractJson<InterviewPrep>(raw);
-    if (!parsed) { setError('Could not parse AI response. Try again.'); setLoading(null); return; }
+    if (!parsed) { 
+      setError('Could not parse AI response. The AI model returned invalid format. Please try again or switch to a different model in settings.'); 
+      setLoading(null); 
+      return; 
+    }
     setPrep(parsed);
     setLoading(null);
     toast.success('Interview prep generated');

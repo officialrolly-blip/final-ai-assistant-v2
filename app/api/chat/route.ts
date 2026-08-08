@@ -13,15 +13,17 @@ interface RequestBody {
 
 // Max tokens per task — interview-prep needs much more room than a single answer
 const MAX_TOKENS: Record<RequestBody['task'], number> = {
-  'analyze-resume': 4000,
-  'generate-ats-resume': 6000,
-  'interview-prep': 8000,
+  'analyze-resume': 6000, // Increased from 4000 to reduce truncation
+  'generate-ats-resume': 8000, // Increased from 6000
+  'interview-prep': 10000, // Increased from 8000
   'answer-question': 2000,
   'detect-question': 200,
 };
 
 const SYSTEM_PROMPTS: Record<RequestBody['task'], string> = {
-  'analyze-resume': `You are an expert career coach and ATS resume analyst. Analyze the resume against the job description and company. Return ONLY valid JSON (no markdown fences, no prose before or after) with this exact schema:
+  'analyze-resume': `CRITICAL INSTRUCTION: You must output ONLY valid JSON. No markdown, no code fences, no explanations, no introductory text, no concluding text.
+
+Return ONLY this JSON structure (starting with { and ending with }):
 {
   "overallScore": number (0-100),
   "atsCompatibility": number (0-100),
@@ -40,8 +42,11 @@ const SYSTEM_PROMPTS: Record<RequestBody['task'], string> = {
   "suggestions": string[],
   "summary": string
 }
-Be specific and actionable. Use the resume and job data provided. Output ONLY the JSON object, starting with { and ending with }.`,
-  'interview-prep': `You are an expert interview coach. Generate interview preparation based on the resume, job, and company. Return ONLY valid JSON (no markdown fences, no prose before or after) with this exact schema:
+
+Be specific and actionable. Analyze the resume against the provided job description and company.`,
+  'interview-prep': `CRITICAL INSTRUCTION: You must output ONLY valid JSON. No markdown, no code fences, no explanations, no introductory text, no concluding text.
+
+Return ONLY this JSON structure (starting with { and ending with }):
 {
   "behavioralQuestions": [{ "id": string, "question": string, "type": "behavioral", "category": "behavioral", "suggestedAnswer": string, "keyPoints": string[] }],
   "technicalQuestions": [{ "id": string, "question": string, "type": "technical", "category": "technical", "suggestedAnswer": string, "keyPoints": string[] }],
@@ -50,7 +55,8 @@ Be specific and actionable. Use the resume and job data provided. Output ONLY th
   "weaknessQuestions": [{ "id": string, "question": string, "type": "weakness", "category": "weakness", "suggestedAnswer": string, "keyPoints": string[] }],
   "strengthQuestions": [{ "id": string, "question": string, "type": "strength", "category": "strength", "suggestedAnswer": string, "keyPoints": string[] }]
 }
-Generate 3-5 questions per category (keep answers concise to fit within token limits). Make answers specific to the candidate's resume. Each "type" must be one of: behavioral, technical, situational, leadership, culture_fit, problem_solving, salary, strength, weakness, follow_up, general. Output ONLY the JSON object, starting with { and ending with }.`,
+
+Generate 3-5 questions per category (keep answers concise). Make answers specific to the candidate's resume. Each "type" must be one of: behavioral, technical, situational, leadership, culture_fit, problem_solving, salary, strength, weakness, follow_up, general.`,
   'generate-ats-resume': `You are an expert ATS resume writer. Rewrite the provided resume into a polished, recruiter-friendly, ATS-compatible resume. Keep the candidate's experience, achievements, and skills intact. Use a clean structured format with clear headings, concise bullet points, quantifiable impact statements, and strong keywords. Do not include markdown fences or any explanation. Return ONLY valid JSON with this exact schema:
 {
   "improvedResume": string,
