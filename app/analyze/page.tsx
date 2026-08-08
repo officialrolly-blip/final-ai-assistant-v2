@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { motion } from 'framer-motion';
-import { ArrowLeft, ArrowRight, Loader2, FileText, Brain, AlertCircle } from 'lucide-react';
+import { ArrowLeft, ArrowRight, Loader2, FileText, Brain, AlertCircle, Sparkles } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -230,13 +230,222 @@ export default function AnalyzePage() {
 }
 
 function LoadingCard({ label }: { label: string }) {
+  const [progress, setProgress] = useState(0);
+  const [displayProgress, setDisplayProgress] = useState(0);
+
+  useEffect(() => {
+    // Simulate realistic AI loading progress
+    const duration = 8000;
+    const interval = 100;
+    const steps = duration / interval;
+    
+    const getProgress = (step: number) => {
+      const ratio = step / steps;
+      if (ratio < 0.3) {
+        return ratio * 2.5;
+      } else if (ratio < 0.7) {
+        return 30 + (ratio - 0.3) * 1.5;
+      } else {
+        return 60 + (ratio - 0.7) * 3.3;
+      }
+    };
+
+    let step = 0;
+    const timer = setInterval(() => {
+      step++;
+      const targetProgress = Math.min(getProgress(step), 99);
+      setProgress(targetProgress);
+      
+      const startTime = Date.now();
+      const animate = () => {
+        const now = Date.now();
+        const elapsed = now - startTime;
+        const ratio = Math.min(elapsed / interval, 1);
+        const easeOut = 1 - Math.pow(1 - ratio, 3);
+        const current = Math.round(displayProgress + (targetProgress - displayProgress) * easeOut);
+        setDisplayProgress(current);
+        
+        if (ratio < 1) {
+          requestAnimationFrame(animate);
+        }
+      };
+      requestAnimationFrame(animate);
+      
+      if (step >= steps) {
+        clearInterval(timer);
+        setProgress(99);
+      }
+    }, interval);
+
+    return () => clearInterval(timer);
+  }, []);
+
   return (
-    <Card className="glass flex flex-col items-center border-0 py-20 text-center shadow-lg">
-      <CardContent>
-        <Loader2 className="mb-4 h-10 w-10 animate-spin text-primary" />
-        <p className="text-sm font-medium">{label}</p>
-        <div className="mx-auto mt-4 h-1 w-48 overflow-hidden rounded-full bg-muted">
-          <div className="h-full w-1/2 animate-shimmer rounded-full" />
+    <Card className="glass relative overflow-hidden border-0 shadow-2xl">
+      <CardContent className="flex flex-col items-center justify-center py-24 text-center">
+        {/* Animated background orbs */}
+        <div className="absolute inset-0 overflow-hidden">
+          <motion.div
+            className="absolute -left-20 -top-20 h-64 w-64 rounded-full bg-primary/20 blur-3xl"
+            animate={{
+              x: [0, 100, 0],
+              y: [0, 50, 0],
+              scale: [1, 1.2, 1],
+            }}
+            transition={{
+              duration: 8,
+              repeat: Infinity,
+              ease: "easeInOut"
+            }}
+          />
+          <motion.div
+            className="absolute -right-20 -bottom-20 h-64 w-64 rounded-full bg-primary/10 blur-3xl"
+            animate={{
+              x: [0, -100, 0],
+              y: [0, -50, 0],
+              scale: [1, 1.3, 1],
+            }}
+            transition={{
+              duration: 10,
+              repeat: Infinity,
+              ease: "easeInOut"
+            }}
+          />
+        </div>
+
+        {/* Main content */}
+        <div className="relative z-10 flex flex-col items-center">
+          {/* Animated circular progress */}
+          <div className="relative mb-8">
+            {/* Outer rotating ring */}
+            <motion.div
+              className="absolute inset-0 h-40 w-40"
+              animate={{ rotate: 360 }}
+              transition={{ duration: 20, repeat: Infinity, ease: "linear" }}
+            >
+              <div className="h-full w-full rounded-full border-2 border-dashed border-primary/30" />
+            </motion.div>
+
+            {/* Middle pulsing ring */}
+            <motion.div
+              className="absolute inset-2 h-36 w-36 rounded-full border-2 border-primary/50"
+              animate={{
+                scale: [1, 1.05, 1],
+                opacity: [0.5, 0.8, 0.5],
+              }}
+              transition={{
+                duration: 2,
+                repeat: Infinity,
+                ease: "easeInOut"
+              }}
+            />
+
+            {/* Inner glowing circle */}
+            <motion.div
+              className="absolute inset-4 flex items-center justify-center rounded-full bg-gradient-to-br from-primary/20 to-primary/5 backdrop-blur-xl"
+              animate={{
+                boxShadow: [
+                  "0 0 20px rgba(var(--primary), 0.3)",
+                  "0 0 40px rgba(var(--primary), 0.5)",
+                  "0 0 20px rgba(var(--primary), 0.3)"
+                ]
+              }}
+              transition={{
+                duration: 2,
+                repeat: Infinity,
+                ease: "easeInOut"
+              }}
+            >
+              {/* Percentage counter */}
+              <div className="flex flex-col items-center">
+                <motion.div
+                  key={displayProgress}
+                  initial={{ scale: 0.8, opacity: 0 }}
+                  animate={{ scale: 1, opacity: 1 }}
+                  className="text-5xl font-bold text-primary"
+                >
+                  {displayProgress}
+                </motion.div>
+                <div className="text-sm font-medium text-muted-foreground">percent</div>
+              </div>
+            </motion.div>
+
+            {/* Floating sparkles */}
+            <motion.div
+              className="absolute -top-4 -right-4"
+              animate={{
+                y: [0, -10, 0],
+                opacity: [0, 1, 0],
+              }}
+              transition={{
+                duration: 2,
+                repeat: Infinity,
+                delay: 0
+              }}
+            >
+              <Sparkles className="h-6 w-6 text-primary" />
+            </motion.div>
+            <motion.div
+              className="absolute -bottom-4 -left-4"
+              animate={{
+                y: [0, -10, 0],
+                opacity: [0, 1, 0],
+              }}
+              transition={{
+                duration: 2,
+                repeat: Infinity,
+                delay: 1
+              }}
+            >
+              <Sparkles className="h-5 w-5 text-primary" />
+            </motion.div>
+          </div>
+
+          {/* Progress bar */}
+          <div className="mb-6 h-2 w-64 overflow-hidden rounded-full bg-muted/50 backdrop-blur">
+            <motion.div
+              className="h-full rounded-full bg-gradient-to-r from-primary via-primary to-primary/70"
+              initial={{ width: "0%" }}
+              animate={{ width: `${progress}%` }}
+              transition={{ duration: 0.3, ease: "easeOut" }}
+            />
+          </div>
+
+          {/* Loading text with animated dots */}
+          <div className="flex items-center gap-2">
+            <Loader2 className="h-5 w-5 animate-spin text-primary" />
+            <p className="text-sm font-medium text-muted-foreground">{label}</p>
+            <motion.div className="flex gap-1">
+              {[0, 1, 2].map((i) => (
+                <motion.div
+                  key={i}
+                  className="h-1.5 w-1.5 rounded-full bg-primary"
+                  animate={{
+                    y: [0, -8, 0],
+                    opacity: [0.3, 1, 0.3],
+                  }}
+                  transition={{
+                    duration: 1,
+                    repeat: Infinity,
+                    delay: i * 0.2,
+                    ease: "easeInOut"
+                  }}
+                />
+              ))}
+            </motion.div>
+          </div>
+
+          {/* Status text */}
+          <motion.p
+            className="mt-4 text-xs text-muted-foreground"
+            animate={{ opacity: [0.5, 1, 0.5] }}
+            transition={{ duration: 2, repeat: Infinity }}
+          >
+            {progress < 30 && "Initializing AI analysis..."}
+            {progress >= 30 && progress < 60 && "Analyzing resume content..."}
+            {progress >= 60 && progress < 90 && "Generating insights..."}
+            {progress >= 90 && "Almost done..."}
+          </motion.p>
         </div>
       </CardContent>
     </Card>
