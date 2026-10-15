@@ -26,6 +26,7 @@ export default function AnalyzePage() {
 
   const [loading, setLoading] = useState<'analysis' | 'prep' | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState('analysis');
 
   useEffect(() => {
     if (!resume || !job) {
