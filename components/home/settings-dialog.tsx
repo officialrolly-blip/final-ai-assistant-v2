@@ -19,19 +19,19 @@ export function SettingsDialog({ open, onOpenChange }: { open: boolean; onOpenCh
   const settings = useCopilotStore((s) => s.settings);
   const update = useCopilotStore((s) => s.updateSettings);
   const { theme, setTheme } = useTheme();
-  const [status, setStatus] = useState<{ openRouter: boolean; deepgram: boolean } | null>(null);
+  const [status, setStatus] = useState<{ groq: boolean; openRouter: boolean; deepgram: boolean } | null>(null);
   const [checking, setChecking] = useState(false);
 
   useEffect(() => {
-    if (open && !status) {
+    if (open) {
       setChecking(true);
       fetch('/api/config')
         .then((r) => r.json())
-        .then((d) => setStatus({ openRouter: d.hasOpenRouter, deepgram: d.hasDeepgram }))
-        .catch(() => setStatus({ openRouter: false, deepgram: false }))
+        .then((d) => setStatus({ groq: d.hasGroq, openRouter: d.hasOpenRouter, deepgram: d.hasDeepgram }))
+        .catch(() => setStatus({ groq: false, openRouter: false, deepgram: false }))
         .finally(() => setChecking(false));
     }
-  }, [open, status]);
+  }, [open]);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -47,7 +47,13 @@ export function SettingsDialog({ open, onOpenChange }: { open: boolean; onOpenCh
             <KeyRound className="h-4 w-4" /> API Key Status
           </div>
           <div className="flex items-center justify-between text-sm">
-            <span className="text-muted-foreground">OpenRouter</span>
+            <span className="text-muted-foreground">Groq (primary, free)</span>
+            {checking ? <Loader2 className="h-4 w-4 animate-spin" /> : status?.groq
+              ? <span className="flex items-center gap-1 text-emerald-500"><CheckCircle2 className="h-4 w-4" /> Connected</span>
+              : <span className="flex items-center gap-1 text-destructive"><XCircle className="h-4 w-4" /> Not set</span>}
+          </div>
+          <div className="flex items-center justify-between text-sm">
+            <span className="text-muted-foreground">OpenRouter (fallback)</span>
             {checking ? <Loader2 className="h-4 w-4 animate-spin" /> : status?.openRouter
               ? <span className="flex items-center gap-1 text-emerald-500"><CheckCircle2 className="h-4 w-4" /> Connected</span>
               : <span className="flex items-center gap-1 text-destructive"><XCircle className="h-4 w-4" /> Not set</span>}
@@ -58,20 +64,20 @@ export function SettingsDialog({ open, onOpenChange }: { open: boolean; onOpenCh
               ? <span className="flex items-center gap-1 text-emerald-500"><CheckCircle2 className="h-4 w-4" /> Connected</span>
               : <span className="flex items-center gap-1 text-destructive"><XCircle className="h-4 w-4" /> Not set</span>}
           </div>
-          {(!status?.openRouter || !status?.deepgram) && (
+          {(!status?.groq || !status?.deepgram) && (
             <p className="text-xs text-muted-foreground">
-              Add OPENROUTER_API_KEY and DEEPGRAM_API_KEY to your <code className="rounded bg-muted px-1">.env</code> file.
+              Add GROQ_API_KEY (free, <code className="rounded bg-muted px-1">console.groq.com/keys</code>) and DEEPGRAM_API_KEY to your <code className="rounded bg-muted px-1">.env</code> file. OpenRouter key is optional fallback.
             </p>
           )}
         </div>
 
         {/* Model */}
         <div className="space-y-2">
-          <Label>OpenRouter Model</Label>
+          <Label>AI Model</Label>
           <Select value={settings.openRouterModel} onValueChange={(v) => update({ openRouterModel: v })}>
             <SelectTrigger><SelectValue /></SelectTrigger>
             <SelectContent>
-              <SelectItem value="auto">Auto (best free model)</SelectItem>
+              <SelectItem value="auto">Auto (Groq free, recommended)</SelectItem>
               {FREE_MODELS.map((m) => (
                 <SelectItem key={m.id} value={m.id}>{m.name}</SelectItem>
               ))}

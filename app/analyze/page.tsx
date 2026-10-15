@@ -66,6 +66,8 @@ export default function AnalyzePage() {
   };
 
   const runPrep = async () => {
+    if (loading !== null) return;
+    setActiveTab('prep');
     setLoading('prep');
     setError(null);
     let raw = '';
@@ -129,7 +131,7 @@ export default function AnalyzePage() {
             <TabsTrigger value="analysis" className="gap-1.5">
               <FileText className="h-4 w-4" /> Analysis
             </TabsTrigger>
-            <TabsTrigger value="prep" className="gap-1.5" onClick={() => !prep && runPrep()}>
+            <TabsTrigger value="prep" className="gap-1.5" onClick={() => { if (!prep && loading === null) runPrep(); }}>
               <Brain className="h-4 w-4" /> Interview Prep
             </TabsTrigger>
           </TabsList>
@@ -167,8 +169,8 @@ export default function AnalyzePage() {
                 </div>
 
                 <div className="flex justify-end gap-3">
-                  <Button variant="outline" onClick={runAnalysis}>Re-analyze</Button>
-                  <Button className="gap-2" onClick={() => { if (!prep) runPrep(); }} disabled={loading === 'prep'}>
+                  <Button variant="outline" onClick={runAnalysis} disabled={loading !== null}>Re-analyze</Button>
+                  <Button className="gap-2" onClick={runPrep} disabled={loading !== null}>
                     {loading === 'prep' ? (
                       <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Preparing…</>
                     ) : (
@@ -220,8 +222,8 @@ export default function AnalyzePage() {
                 <CardContent className="flex flex-col items-center py-16 text-center">
                   <Brain className="mb-4 h-12 w-12 text-primary" />
                   <p className="mb-4 text-muted-foreground">Generate interview questions and model answers.</p>
-                  <Button onClick={runPrep} className="gap-2">
-                    Generate Prep <ArrowRight className="h-4 w-4" />
+                  <Button onClick={runPrep} disabled={loading !== null} className="gap-2">
+                    {loading === 'prep' ? 'Preparing…' : 'Generate Prep'} <ArrowRight className="h-4 w-4" />
                   </Button>
                 </CardContent>
               </Card>

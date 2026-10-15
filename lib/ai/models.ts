@@ -1,33 +1,65 @@
-// Curated list of free OpenRouter models, ordered by preference for interview-assistant use.
-// The manager tries each in order until one works.
-export interface OpenRouterModel {
+// Provider model catalog.
+// Priority: Groq (free, fast, generous rate limits) first,
+// OpenRouter free models last (shared 50 req/day cap — kept only as fallback).
+export interface ProviderModel {
+  provider: 'groq' | 'openrouter';
   id: string;
   name: string;
   free: boolean;
 }
 
-export const FREE_MODELS: OpenRouterModel[] = [
-  { id: 'inclusionai/ling-3.0-flash:free', name: 'Ling 3.0 Flash (free)', free: true },
-  { id: 'poolside/laguna-s-2.1:free', name: 'Poolside Laguna S 2.1 (free)', free: true },
-  { id: 'google/gemma-4-26b-a4b-it:free', name: 'Google Gemma 4 26B A4B (free)', free: true },
-  { id: 'google/gemma-4-31b-it:free', name: 'Google Gemma 4 31B (free)', free: true },
-  { id: 'nvidia/nemotron-3-super-120b-a12b:free', name: 'NVIDIA Nemotron 3 Super 120B (free)', free: true },
-  { id: 'meta-llama/llama-3.3-70b-instruct:free', name: 'Meta Llama 3.3 70B (free)', free: true },
-  { id: 'qwen/qwen3-32b:free', name: 'Qwen 3 32B (free)', free: true },
-  { id: 'deepseek/deepseek-chat-v3-0324:free', name: 'DeepSeek Chat V3 (free)', free: true },
-  { id: 'mistralai/mistral-small-3.1-24b-instruct:free', name: 'Mistral Small 3.1 24B (free)', free: true },
-  { id: 'openai/gpt-oss-120b:free', name: 'OpenAI GPT-OSS 120B (free)', free: true },
-  { id: 'moonshotai/kimi-k2-instruct:free', name: 'Kimi K2 Instruct (free)', free: true },
-  { id: 'z-ai/glm-4.5-air:free', name: 'Z-AI GLM 4.5 Air (free)', free: true },
-  { id: 'nvidia/llama-3.1-nemotron-70b-instruct:free', name: 'NVIDIA Llama 3.1 Nemotron 70B (free)', free: true },
-  { id: 'cognitivecomputations/dolphin3.0-mistral-24b:free', name: 'Dolphin 3.0 Mistral 24B (free)', free: true },
-  { id: 'allenai/olmo-2-1124-7b-instruct:free', name: 'OLMo 2 1124 7B (free)', free: true },
-  { id: 'qwen/qwen2.5-72b-instruct:free', name: 'Qwen 2.5 72B (free)', free: true },
-  { id: 'meta-llama/llama-3.1-8b-instruct:free', name: 'Meta Llama 3.1 8B (free)', free: true },
+export const FREE_MODELS: ProviderModel[] = [
+  // --- Groq (primary: free, fast, stable) ---
+  // Production models per https://console.groq.com/docs/models.
+  // Free Developer tier: generous RPM limits (e.g. 1K RPM on GPT-OSS).
+  { provider: 'groq', id: 'groq:openai/gpt-oss-20b', name: 'GPT-OSS 20B via Groq (free, recommended)', free: true },
+  { provider: 'groq', id: 'groq:openai/gpt-oss-120b', name: 'GPT-OSS 120B via Groq (free, most capable)', free: true },
+  { provider: 'groq', id: 'groq:qwen/qwen3.8-27b', name: 'Qwen 3.8 27B via Groq (free)', free: true },
+  { provider: 'groq', id: 'groq:allam-2-7b', name: 'Allam 2 7B via Groq (free)', free: true },
+  // --- OpenRouter free (fallback only: shared 50 req/day) ---
+  { provider: 'openrouter', id: 'openrouter:google/gemma-4-31b-it:free', name: 'Gemma 4 31B via OpenRouter (free)', free: true },
+  { provider: 'openrouter', id: 'openrouter:google/gemma-4-26b-a4b-it:free', name: 'Gemma 4 26B via OpenRouter (free)', free: true },
+  { provider: 'openrouter', id: 'openrouter:nvidia/nemotron-3-super-120b-a12b:free', name: 'Nemotron 3 Super via OpenRouter (free)', free: true },
+  { provider: 'openrouter', id: 'openrouter:thinkingmachines/inkling:free', name: 'Inkling via OpenRouter (free)', free: true },
+  { provider: 'openrouter', id: 'openrouter:poolside/laguna-s-2.1:free', name: 'Laguna S 2.1 via OpenRouter (free)', free: true },
 ];
 
+/** Strip the "provider:" prefix to get the raw model id for the upstream API. */
+export function rawModelId(id: string): string {
+  const idx = id.indexOf(':');
+  // Groq ids "groq:llama-3.3-70b-versatile" -> "llama-3.3-70b-versatile".
+  // Groq GPT-OSS ids "groq:openai/gpt-oss-20b" -> "openai/gpt-oss-20b".
+  // OpenRouter ids "openrouter:google/gemma..." -> "google/gemma...".
+  if (idx > -1 && (id.startsWith('groq:') || id.startsWith('openrouter:'))) {
+    return id.slice(idx + 1);
+  }
+  return id;
+}
+
+/** Which provider handles this id? Defaults to groq. */
+export function providerFor(id: string): 'groq' | 'openrouter' {
+  const found = FREE_MODELS.find((m) => m.id === id);
+  if (found) return found.provider;
+  if (id.startsWith('openrouter:')) return 'openrouter';
+  return 'groq';
+}
+
+/** Legacy OpenRouter-only ids (no prefix) still resolve — mapped into the new chain. */
+function legacyOpenRouterId(id: string): string | null {
+  if (id.includes('/') && id.endsWith(':free')) return `openrouter:${id}`;
+  return null;
+}
+
 export function resolveModelId(choice: string): string {
-  if (choice && choice !== 'auto') return choice;
+  if (choice && choice !== 'auto') {
+    // Accept new prefixed ids and legacy OpenRouter ids.
+    // Legacy gemini:* ids are retired — fall through to auto (Groq default).
+    if (FREE_MODELS.some((m) => m.id === choice)) return choice;
+    if (choice.startsWith('gemini:') || /^gemini-[\w.-]+$/.test(choice)) return FREE_MODELS[0].id;
+    const legacy = legacyOpenRouterId(choice);
+    if (legacy && FREE_MODELS.some((m) => m.id === legacy)) return legacy;
+    return choice;
+  }
   return FREE_MODELS[0].id;
 }
 

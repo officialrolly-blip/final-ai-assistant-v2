@@ -1,5 +1,6 @@
 import { create } from 'zustand';
 import { persist } from 'zustand/middleware';
+import { FREE_MODELS } from '@/lib/ai/models';
 import type {
   ParsedResume,
   JobInfo,
@@ -104,7 +105,7 @@ export const useCopilotStore = create<CopilotState>()(
     }),
     {
       name: 'interview-copilot-v1',
-      version: 1,
+      version: 4,
       migrate: (persistedState, version) => {
         const state = persistedState as Partial<CopilotState> | undefined;
         // Coming from the pre-v1 store (or no version): bump the teleprompter font
@@ -116,6 +117,18 @@ export const useCopilotStore = create<CopilotState>()(
           state.settings.teleprompterFontSize <= 28
         ) {
           state.settings.teleprompterFontSize = defaultSettings.teleprompterFontSize;
+        }
+        // v4: Groq-first catalog (groq:* primary, openrouter:* fallback).
+        // Any saved id not in the catalog (incl. all retired gemini:* and legacy
+        // bare OpenRouter ids) falls back to auto.
+        if (state?.settings && typeof state.settings.openRouterModel === 'string') {
+          const validIds = new Set(FREE_MODELS.map((m) => m.id));
+          if (state.settings.openRouterModel !== 'auto' && !validIds.has(state.settings.openRouterModel)) {
+            state.settings.openRouterModel = 'auto';
+          }
+        } else if (version < 3 && state?.settings) {
+          // Ensure older persisted stores without the field also reset to auto
+          (state.settings as { openRouterModel?: string }).openRouterModel = 'auto';
         }
         return state as CopilotState;
       },

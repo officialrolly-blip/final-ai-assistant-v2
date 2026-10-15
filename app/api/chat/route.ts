@@ -1,5 +1,7 @@
 import { NextRequest } from 'next/server';
-import { FREE_MODELS, resolveModelId } from '@/lib/ai/models';
+import { FREE_MODELS, resolveModelId, rawModelId, providerFor } from '@/lib/ai/models';
+import { tryGroq } from '@/lib/ai/groq';
+import { tryOpenRouter } from '@/lib/ai/openrouter';
 import type { ChatMessage } from '@/lib/types';
 
 export const dynamic = 'force-dynamic';
@@ -94,10 +96,11 @@ export async function POST(req: NextRequest) {
   const body = (await req.json()) as RequestBody;
   const { task, messages, model } = body;
 
-  const apiKey = process.env.OPENROUTER_API_KEY;
-  if (!apiKey) {
+  const groqKey = process.env.GROQ_API_KEY ?? '';
+  const openRouterKey = process.env.OPENROUTER_API_KEY ?? '';
+  if (!groqKey && !openRouterKey) {
     return new Response(
-      JSON.stringify({ error: 'OPENROUTER_API_KEY is not set. Add it to your .env file.' }),
+      JSON.stringify({ error: 'No AI provider key set. Add GROQ_API_KEY (recommended, free at console.groq.com) or OPENROUTER_API_KEY to your .env file.' }),
       { status: 500, headers: { 'Content-Type': 'application/json' } }
     );
   }
@@ -105,104 +108,71 @@ export async function POST(req: NextRequest) {
   const systemPrompt = SYSTEM_PROMPTS[task] ?? SYSTEM_PROMPTS['answer-question'];
   const fullMessages: ChatMessage[] = [{ role: 'system', content: systemPrompt }, ...messages];
 
-  // Model fallback chain: chosen model first, then all free models.
-  const requested = model && model !== 'auto' ? [model] : [];
-  const chain = [...requested, ...FREE_MODELS.map((m) => m.id)].filter(
-    (id, i, arr) => arr.indexOf(id) === i
-  );
+  // Fallback chain: chosen model first, then all free models (Groq first).
+  const resolvedRequested = model && model !== 'auto' ? resolveModelId(model) : null;
+  const validIds = new Set(FREE_MODELS.map((m) => m.id));
+  const requested = resolvedRequested && validIds.has(resolvedRequested) ? [resolvedRequested] : [];
+  // Skip providers with no key configured.
+  const chain = [...requested, ...FREE_MODELS.map((m) => m.id)]
+    .filter((id, i, arr) => arr.indexOf(id) === i)
+    .filter((id) => (providerFor(id) === 'groq' ? Boolean(groqKey) : Boolean(openRouterKey)));
 
   const maxTokens = MAX_TOKENS[task] ?? 2000;
   const encoder = new TextEncoder();
 
-  const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
   const stream = new ReadableStream({
     async start(controller) {
+      const emit = (obj: unknown) =>
+        controller.enqueue(encoder.encode(`data: ${JSON.stringify(obj)}\n\n`));
       let succeeded = false;
       let lastError = '';
 
       for (const modelId of chain) {
         if (succeeded) break;
+        const provider = providerFor(modelId);
+        const raw = rawModelId(modelId);
 
-        // Try each model up to 3 times with exponential backoff for 429s
-        for (let attempt = 0; attempt < 3 && !succeeded; attempt += 1) {
-          try {
-            const res = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-              method: 'POST',
-              headers: {
-                Authorization: `Bearer ${apiKey}`,
-                'Content-Type': 'application/json',
-                'HTTP-Referer': 'http://localhost:3000',
-                'X-Title': 'Interview Copilot',
-              },
-              body: JSON.stringify({
-                model: modelId,
-                messages: fullMessages,
-                stream: true,
-                temperature: 0.7,
-                max_tokens: maxTokens,
-              }),
-            });
-
-            if (!res.ok || !res.body) {
-              lastError = `${modelId}: HTTP ${res.status}`;
-              if (res.status === 429) {
-                // Exponential backoff: 1.2s, 2.4s, 4.8s
-                const backoff = 1200 * Math.pow(2, attempt);
-                await sleep(backoff);
-                continue;
-              }
-              // Non-retryable error like 404 — move to next model immediately
-              break;
-            }
-
-            // Signal which model is being used
-            controller.enqueue(encoder.encode(`data: ${JSON.stringify({ model: modelId })}\n\n`));
-
-            const reader = res.body.getReader();
-            const decoder = new TextDecoder();
-            let buffer = '';
-
-            while (true) {
-              const { done, value } = await reader.read();
-              if (done) break;
-              buffer += decoder.decode(value, { stream: true });
-              const lines = buffer.split('\n');
-              buffer = lines.pop() ?? '';
-
-              for (const line of lines) {
-                const trimmed = line.trim();
-                if (!trimmed || !trimmed.startsWith('data:')) continue;
-                const data = trimmed.slice(5).trim();
-                if (data === '[DONE]') continue;
-                try {
-                  const parsed = JSON.parse(data);
-                  const delta = parsed.choices?.[0]?.delta?.content;
-                  if (delta) {
-                    controller.enqueue(encoder.encode(`data: ${JSON.stringify({ content: delta })}\n\n`));
-                  }
-                } catch {
-                  // ignore malformed chunk
-                }
-              }
-            }
+        // Up to 2 attempts for retryable errors (429/5xx/network); else next model.
+        for (let attempt = 0; attempt < 2 && !succeeded; attempt += 1) {
+          console.log(`[chat] trying ${modelId} (attempt ${attempt + 1})`);
+          const result =
+            provider === 'groq'
+              ? await tryGroq(modelId, raw, {
+                  apiKey: groqKey,
+                  messages: fullMessages,
+                  maxTokens,
+                  emit,
+                })
+              : await tryOpenRouter(modelId, raw, {
+                  apiKey: openRouterKey,
+                  messages: fullMessages,
+                  maxTokens,
+                  emit,
+                });
+          if (result.ok) {
             succeeded = true;
-          } catch (err) {
-            lastError = `${modelId}: ${err instanceof Error ? err.message : String(err)}`;
-            if (lastError.includes('429')) {
-              const backoff = 1200 * Math.pow(2, attempt);
-              await sleep(backoff);
-              continue;
-            }
             break;
           }
+          lastError = result.error;
+          console.error(`[chat] ${modelId} failed:`, lastError);
+          // OpenRouter's daily free-quota 429 won't clear by waiting — skip ahead.
+          if (result.retryable && !lastError.includes('free-models-per-day') && attempt === 0) {
+            await sleep(1500);
+            continue;
+          }
+          break;
         }
       }
 
       if (!succeeded) {
-        controller.enqueue(
-          encoder.encode(`data: ${JSON.stringify({ error: `All models failed. Last: ${lastError}` })}\n\n`)
-        );
+        const hint = !groqKey
+          ? ' Tip: add a free GROQ_API_KEY (https://console.groq.com/keys) for fast, stable free inference.'
+          : lastError.includes('free-models-per-day')
+            ? ' Tip: OpenRouter free quota is 50 req/day — Groq is primary, but it also failed. Check server logs.'
+            : '';
+        emit({ error: `All models failed. Last: ${lastError}${hint}` });
       }
       controller.enqueue(encoder.encode('data: [DONE]\n\n'));
       controller.close();
@@ -217,7 +187,6 @@ export async function POST(req: NextRequest) {
     },
   });
 }
-
 export async function GET() {
   return new Response(
     JSON.stringify({ models: FREE_MODELS, defaultModel: resolveModelId('auto') }),

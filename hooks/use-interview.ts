@@ -36,7 +36,15 @@ export function useInterview() {
   const openRouterModel = useCopilotStore((s) => s.settings.openRouterModel);
 
   const deepgramRef = useRef<DeepgramStream | null>(null);
-  const lastQuestionRef = useRef('');
+  // Normalized text of the most recent question we actually committed an answer
+  // for. Used to avoid duplicate answers while still allowing a retry when a
+  // previous attempt (e.g. a speculative one) failed and produced no answer.
+  const answeredRef = useRef('');
+  // Handle for the currently registered generation: its normalized question and
+  // completion promise. Lets callers (e.g. finalizeQuestion) AWAIT an in-flight
+  // generation and retry it if it fails, instead of the answer silently
+  // never appearing.
+  const genStateRef = useRef<{ token: number; question: string; promise: Promise<boolean> } | null>(null);
   const answerAbortRef = useRef<AbortController | null>(null);
   const configRef = useRef<{ deepgramKey: string; model: string } | null>(null);
   const isGeneratingRef = useRef(false);
@@ -87,85 +95,107 @@ export function useInterview() {
   }, []);
 
   const generateAnswer = useCallback(
-    async (question: string) => {
+    async (question: string): Promise<boolean> => {
       const q = question.trim();
-      if (!q) return;
-      // Dedupe: if we're already answering (or finished) this exact question, do nothing.
-      if (q === lastQuestionRef.current) return;
-      // Otherwise supersede any in-flight (possibly speculative) answer with this one.
-      lastQuestionRef.current = q;
+      if (!q) return false;
+      const nq = normalizeQuestion(q);
+      // Already produced an answer for this exact question — don't duplicate.
+      if (nq === answeredRef.current) return true;
+
+      // An identical generation is already in flight — await it instead of
+      // aborting and restarting the same work. If it FAILS, fall through and
+      // retry below with this (possibly more complete) question text;
+      // otherwise the answer would silently never appear.
+      const inFlight = genStateRef.current;
+      if (isGeneratingRef.current && inFlight && nq === inFlight.question) {
+        const ok = await inFlight.promise;
+        if (ok) return true;
+        // Only retry if nothing newer claimed the generation slot meanwhile.
+        if (genTokenRef.current !== inFlight.token || nq === answeredRef.current) return ok;
+      }
+
+      // Claim the generation slot, superseding any other in-flight answer.
       isGeneratingRef.current = true;
       setCurrentQuestion(q);
       setThinking(true);
 
-      // Cancel any in-flight answer and claim a fresh generation token.
       answerAbortRef.current?.abort();
       const ac = new AbortController();
       answerAbortRef.current = ac;
       const token = ++genTokenRef.current;
 
-      let raw = '';
-      const messages = [
-        ...buildContextMessages(),
-        { role: 'user' as const, content: `Interviewer asks: "${q}"\n\nGenerate the answer now.` },
-      ];
+      const promise = (async (): Promise<boolean> => {
+        setCurrentAnswer('');
+        let success = false;
+        // Free models intermittently fail or return empty/unparseable output.
+        // Retry once so the answer reliably appears instead of vanishing.
+        for (let attempt = 0; attempt < 2 && !success; attempt++) {
+          if (token !== genTokenRef.current || ac.signal.aborted) break;
+          if (attempt > 0) setCurrentAnswer(''); // drop partial output from failed attempt
+          let raw = '';
+          try {
+            const messages = [
+              ...buildContextMessages(),
+              { role: 'user' as const, content: `Interviewer asks: "${q}"\n\nGenerate the answer now.` },
+            ];
+            const res = await streamChat({
+              task: 'answer-question',
+              messages,
+              model: configRef.current?.model ?? 'auto',
+              signal: ac.signal,
+              onToken: (chunk) => {
+                // Ignore late tokens from a superseded/aborted generation.
+                if (token !== genTokenRef.current) return;
+                raw += chunk;
+                setCurrentAnswer(raw);
+              },
+            });
 
-      setCurrentAnswer('');
-      try {
-        const res = await streamChat({
-          task: 'answer-question',
-          messages,
-          model: configRef.current?.model ?? 'auto',
-          signal: ac.signal,
-          onToken: (chunk) => {
-            // Ignore late tokens from a superseded/aborted generation.
-            if (token !== genTokenRef.current) return;
-            raw += chunk;
-            setCurrentAnswer(raw);
-          },
-        });
+            // A newer question superseded this one — bail out silently.
+            if (token !== genTokenRef.current || res.error === 'aborted') break;
 
-        // A newer question superseded this one while we were streaming — bail out
-        // without parsing, adding a turn, or touching shared state.
-        if (token !== genTokenRef.current) return;
-
-        if (!res.ok || !raw.trim()) {
-          // Aborted, network error, or empty model output. Only surface an error
-          // if this is still the active generation (not a silent supersede).
-          if (token === genTokenRef.current) {
-            console.warn('Answer generation produced no output.', res.error ?? '');
+            if (res.ok && raw.trim()) {
+              const parsed = extractJson<AIAnswer>(raw);
+              if (parsed) {
+                const turn: ConversationTurn = {
+                  id: crypto.randomUUID(),
+                  role: 'assistant',
+                  content: q,
+                  questionType: parsed.questionType ?? 'general',
+                  confidence: parsed.confidenceScore ?? 0,
+                  answer: parsed,
+                  timestamp: Date.now(),
+                };
+                addTurn(turn);
+                // Record that this question now has an answer (normalized so a
+                // nearly-identical finalize text won't generate a duplicate).
+                answeredRef.current = nq;
+                success = true;
+                break;
+              }
+              console.warn('Could not parse AI answer JSON.');
+            } else {
+              console.warn('Answer generation produced no output.', res.error ?? '');
+            }
+          } catch (err) {
+            if (err instanceof DOMException && err.name === 'AbortError') break;
+            console.error('Failed to generate answer:', err);
           }
-          return;
         }
+        return success;
+      })();
 
-        const parsed = extractJson<AIAnswer>(raw);
-        if (!parsed) {
-          console.warn('Could not parse AI answer JSON.');
-          return;
-        }
-        const turn: ConversationTurn = {
-          id: crypto.randomUUID(),
-          role: 'assistant',
-          content: q,
-          questionType: parsed.questionType ?? 'general',
-          confidence: parsed.confidenceScore ?? 0,
-          answer: parsed,
-          timestamp: Date.now(),
-        };
-        addTurn(turn);
-      } catch (err) {
-        if (err instanceof DOMException && err.name === 'AbortError') {
-          // Aborted — a new/superseding question came in, don't add a turn
-        } else {
-          console.error('Failed to generate answer:', err);
-        }
-      } finally {
-        // Only the latest generation owns the shared "thinking" state.
-        if (token === genTokenRef.current) {
-          isGeneratingRef.current = false;
-          setThinking(false);
-        }
+      genStateRef.current = { token, question: nq, promise };
+      const ok = await promise;
+      // Only clear the handle if it's still ours (a newer generation may have
+      // replaced it while we were awaiting).
+      if (genStateRef.current?.token === token) genStateRef.current = null;
+      // Only the latest generation owns the shared "thinking" state.
+      if (token === genTokenRef.current) {
+        isGeneratingRef.current = false;
+        setThinking(false);
       }
+      return ok;
     },
     [buildContextMessages, addTurn, setCurrentAnswer, setCurrentQuestion, setThinking]
   );
@@ -189,7 +219,7 @@ export function useInterview() {
       setDeepgramSpeaking(false);
       setListeningBuffer('');
       pendingQuestionRef.current = '';
-      if (question) generateAnswer(question);
+      if (question) void generateAnswer(question);
     },
     [generateAnswer, setIsListeningToInterviewer, setDeepgramSpeaking, setListeningBuffer]
   );
@@ -207,7 +237,7 @@ export function useInterview() {
       }
       pendingQuestionRef.current = '';
       // Allow the same question text to be answered again in a new utterance.
-      lastQuestionRef.current = '';
+      answeredRef.current = '';
       setIsListeningToInterviewer(true);
       setDeepgramSpeaking(true);
       setCurrentQuestion('');
@@ -253,7 +283,7 @@ export function useInterview() {
         // interviewer is still finishing — so the answer is ready almost instantly.
         if (looksLikeCompleteQuestion(partial)) {
           const speculative = (pendingQuestionRef.current + ' ' + partial).trim();
-          generateAnswerRef.current(speculative);
+          void generateAnswerRef.current(speculative);
         }
       }
     },
@@ -363,4 +393,15 @@ function looksLikeCompleteQuestion(text: string): boolean {
   const t = text.trim();
   if (t.length < 12) return false; // too short to be a meaningful question
   return /[?？]["'”’)\]]?\s*$/.test(t);
+}
+
+// Normalize question text for dedup so a speculative partial ("…strength?")
+// and the finalized utterance ("…strength.") count as the same question —
+// avoids aborting/restarting identical work and duplicate answers.
+function normalizeQuestion(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .replace(/[\s.,!?;:'"“”‘’)>\]]+$/, '')
+    .trim();
 }
