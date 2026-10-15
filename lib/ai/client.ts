@@ -135,6 +135,57 @@ function tryParse<T>(text: string): T | null {
   }
 }
 
+// Best-effort extraction of a single string field from a *partial* (still
+// streaming) JSON response. Used to show the professional response live as it
+// arrives, instead of waiting for the whole JSON object to finish.
+// Returns the decoded value so far, or '' if the field isn't present yet.
+export function extractPartialString(raw: string, field: string): string {
+  const key = `"${field}"`;
+  const keyIdx = raw.indexOf(key);
+  if (keyIdx === -1) return '';
+  // Find the colon after the key, then the opening quote of the value.
+  let i = keyIdx + key.length;
+  while (i < raw.length && raw[i] !== ':') i++;
+  i++; // skip ':'
+  while (i < raw.length && /\s/.test(raw[i])) i++;
+  if (raw[i] !== '"') return '';
+  i++; // skip opening quote
+
+  let out = '';
+  while (i < raw.length) {
+    const ch = raw[i];
+    if (ch === '\\') {
+      const next = raw[i + 1];
+      if (next === undefined) break; // truncated escape sequence
+      switch (next) {
+        case 'n': out += '\n'; break;
+        case 't': out += '\t'; break;
+        case 'r': out += '\r'; break;
+        case '"': out += '"'; break;
+        case '\\': out += '\\'; break;
+        case '/': out += '/'; break;
+        case 'b': out += '\b'; break;
+        case 'f': out += '\f'; break;
+        case 'u': {
+          const hex = raw.slice(i + 2, i + 6);
+          if (hex.length < 4) { i = raw.length; break; } // truncated unicode escape
+          out += String.fromCharCode(parseInt(hex, 16));
+          i += 4;
+          break;
+        }
+        default: out += next;
+      }
+      i += 2;
+    } else if (ch === '"') {
+      break; // closing quote — value complete
+    } else {
+      out += ch;
+      i++;
+    }
+  }
+  return out;
+}
+
 // Attempt to repair truncated JSON by auto-closing open braces/brackets.
 function repairJson(text: string): string | null {
   let braces = 0;

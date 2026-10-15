@@ -31,6 +31,7 @@ export function useInterview() {
   const setIsListeningToInterviewer = useCopilotStore((s) => s.setIsListeningToInterviewer);
   const setDeepgramConnected = useCopilotStore((s) => s.setDeepgramConnected);
   const setDeepgramSpeaking = useCopilotStore((s) => s.setDeepgramSpeaking);
+  const setListeningBuffer = useCopilotStore((s) => s.setListeningBuffer);
   // Select only the scalar we need for the config effect dependency.
   const openRouterModel = useCopilotStore((s) => s.settings.openRouterModel);
 
@@ -39,6 +40,16 @@ export function useInterview() {
   const answerAbortRef = useRef<AbortController | null>(null);
   const configRef = useRef<{ deepgramKey: string; model: string } | null>(null);
   const isGeneratingRef = useRef(false);
+  // Accumulates finalized speech for the question currently being asked, plus a
+  // debounce timer that finalizes the question when the interviewer pauses.
+  // This is a reliable fallback in case Deepgram's VAD SpeechEnded event
+  // doesn't arrive — otherwise the UI gets stuck on "AI is listening...".
+  const pendingQuestionRef = useRef('');
+  const endTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Monotonic token identifying the latest answer generation. Lets an aborted /
+  // superseded request detect that it's no longer current and bail out instead
+  // of parsing empty output or clobbering a newer in-flight answer's state.
+  const genTokenRef = useRef(0);
 
   // Load config once (re-fetch if model changes)
   useEffect(() => {
@@ -77,65 +88,126 @@ export function useInterview() {
 
   const generateAnswer = useCallback(
     async (question: string) => {
-      if (!question.trim() || question === lastQuestionRef.current) return;
-      if (isGeneratingRef.current) return;
-      lastQuestionRef.current = question;
+      const q = question.trim();
+      if (!q) return;
+      // Dedupe: if we're already answering (or finished) this exact question, do nothing.
+      if (q === lastQuestionRef.current) return;
+      // Otherwise supersede any in-flight (possibly speculative) answer with this one.
+      lastQuestionRef.current = q;
       isGeneratingRef.current = true;
-      setCurrentQuestion(question);
+      setCurrentQuestion(q);
       setThinking(true);
 
-      // Cancel any in-flight answer
+      // Cancel any in-flight answer and claim a fresh generation token.
       answerAbortRef.current?.abort();
       const ac = new AbortController();
       answerAbortRef.current = ac;
+      const token = ++genTokenRef.current;
 
       let raw = '';
       const messages = [
         ...buildContextMessages(),
-        { role: 'user' as const, content: `Interviewer asks: "${question}"\n\nGenerate the answer now.` },
+        { role: 'user' as const, content: `Interviewer asks: "${q}"\n\nGenerate the answer now.` },
       ];
 
       setCurrentAnswer('');
       try {
-        await streamChat({
+        const res = await streamChat({
           task: 'answer-question',
           messages,
           model: configRef.current?.model ?? 'auto',
           signal: ac.signal,
           onToken: (chunk) => {
+            // Ignore late tokens from a superseded/aborted generation.
+            if (token !== genTokenRef.current) return;
             raw += chunk;
             setCurrentAnswer(raw);
           },
         });
 
+        // A newer question superseded this one while we were streaming — bail out
+        // without parsing, adding a turn, or touching shared state.
+        if (token !== genTokenRef.current) return;
+
+        if (!res.ok || !raw.trim()) {
+          // Aborted, network error, or empty model output. Only surface an error
+          // if this is still the active generation (not a silent supersede).
+          if (token === genTokenRef.current) {
+            console.warn('Answer generation produced no output.', res.error ?? '');
+          }
+          return;
+        }
+
         const parsed = extractJson<AIAnswer>(raw);
+        if (!parsed) {
+          console.warn('Could not parse AI answer JSON.');
+          return;
+        }
         const turn: ConversationTurn = {
           id: crypto.randomUUID(),
           role: 'assistant',
-          content: question,
-          questionType: parsed?.questionType ?? 'general',
-          confidence: parsed?.confidenceScore ?? 0,
-          answer: parsed ?? undefined,
+          content: q,
+          questionType: parsed.questionType ?? 'general',
+          confidence: parsed.confidenceScore ?? 0,
+          answer: parsed,
           timestamp: Date.now(),
         };
         addTurn(turn);
       } catch (err) {
         if (err instanceof DOMException && err.name === 'AbortError') {
-          // Aborted — a new question came in, don't add a turn
+          // Aborted — a new/superseding question came in, don't add a turn
         } else {
           console.error('Failed to generate answer:', err);
         }
       } finally {
-        isGeneratingRef.current = false;
-        setThinking(false);
+        // Only the latest generation owns the shared "thinking" state.
+        if (token === genTokenRef.current) {
+          isGeneratingRef.current = false;
+          setThinking(false);
+        }
       }
     },
     [buildContextMessages, addTurn, setCurrentAnswer, setCurrentQuestion, setThinking]
   );
 
+  // Always call the latest generateAnswer from interim callbacks (avoids stale closures).
+  const generateAnswerRef = useRef(generateAnswer);
+  generateAnswerRef.current = generateAnswer;
+
+  // Finalize the current question when the interviewer stops speaking. Triggered
+  // either by Deepgram's VAD SpeechEnded event or by the end-of-speech debounce
+  // timer (a reliable fallback if VAD events don't arrive). Always resets the
+  // "listening" state so the UI never gets stuck, then generates the answer.
+  const finalizeQuestion = useCallback(
+    (text: string) => {
+      if (endTimerRef.current) {
+        clearTimeout(endTimerRef.current);
+        endTimerRef.current = null;
+      }
+      const question = text.trim();
+      setIsListeningToInterviewer(false);
+      setDeepgramSpeaking(false);
+      setListeningBuffer('');
+      pendingQuestionRef.current = '';
+      if (question) generateAnswer(question);
+    },
+    [generateAnswer, setIsListeningToInterviewer, setDeepgramSpeaking, setListeningBuffer]
+  );
+
+  // Always call the latest finalizeQuestion from timer callbacks (avoids stale closures).
+  const finalizeRef = useRef(finalizeQuestion);
+  finalizeRef.current = finalizeQuestion;
+
   const handleSpeechStarted = useCallback(
     () => {
-      // The interviewer started speaking — AI should show it's listening
+      // The interviewer started speaking — reset any pending question + timer
+      if (endTimerRef.current) {
+        clearTimeout(endTimerRef.current);
+        endTimerRef.current = null;
+      }
+      pendingQuestionRef.current = '';
+      // Allow the same question text to be answered again in a new utterance.
+      lastQuestionRef.current = '';
       setIsListeningToInterviewer(true);
       setDeepgramSpeaking(true);
       setCurrentQuestion('');
@@ -146,39 +218,69 @@ export function useInterview() {
   const handleSegment = useCallback(
     (seg: TranscriptSegment) => {
       if (seg.isFinal && seg.text.trim()) {
-        // Add interviewer turn to history
+        const text = seg.text.trim();
+        // Commit finalized interviewer speech to the permanent transcript history
         addTurn({
           id: crypto.randomUUID(),
           role: 'interviewer',
-          content: seg.text.trim(),
+          content: text,
           questionType: 'general',
           confidence: seg.confidence,
           timestamp: Date.now(),
         });
+        // Accumulate finalized speech for the question currently being asked
+        pendingQuestionRef.current = (pendingQuestionRef.current + ' ' + text).trim();
+        setListeningBuffer('');
+        // We're actively hearing speech
+        if (!useCopilotStore.getState().isListeningToInterviewer) {
+          setIsListeningToInterviewer(true);
+        }
+        // (Re)start the end-of-speech debounce: if no new final arrives in time,
+        // treat it as the end of the question and generate the answer.
+        if (endTimerRef.current) clearTimeout(endTimerRef.current);
+        endTimerRef.current = setTimeout(() => {
+          finalizeRef.current(pendingQuestionRef.current);
+        }, 1200);
       } else {
-        // Interim — show live partial (but only if we're in listening mode)
-        if (useCopilotStore.getState().isListeningToInterviewer) {
-          setCurrentQuestion(seg.text.trim());
+        // Interim — update the live partial transcript in real time (word-by-word)
+        const partial = seg.text.trim();
+        setListeningBuffer(partial);
+        if (!useCopilotStore.getState().isListeningToInterviewer) {
+          setIsListeningToInterviewer(true);
+        }
+        // Speculative early-start: if the partial transcript already looks like a
+        // complete question (ends with "?"), begin generating NOW — while the
+        // interviewer is still finishing — so the answer is ready almost instantly.
+        if (looksLikeCompleteQuestion(partial)) {
+          const speculative = (pendingQuestionRef.current + ' ' + partial).trim();
+          generateAnswerRef.current(speculative);
         }
       }
     },
-    [addTurn, setCurrentQuestion]
+    [addTurn, setListeningBuffer, setIsListeningToInterviewer]
   );
 
   const handleSpeechEnd = useCallback(
-    (text: string) => {
-      // The interviewer finished speaking
-      // Update the listening state
+    (_text: string) => {
+      // VAD reported the interviewer finished speaking — finalize immediately.
+      // (The debounce timer in handleSegment is the fallback if this never fires.)
+      finalizeRef.current(pendingQuestionRef.current || _text);
+    },
+    []
+  );
+
+  // Safety net: VAD said speech ended even if no finalized text was captured.
+  // Guarantees the "listening" indicator can never get stuck.
+  const handleSpeechEnded = useCallback(
+    () => {
+      if (endTimerRef.current) {
+        clearTimeout(endTimerRef.current);
+        endTimerRef.current = null;
+      }
       setIsListeningToInterviewer(false);
       setDeepgramSpeaking(false);
-      setCurrentQuestion(text);
-
-      // Now generate the answer
-      if (text.trim()) {
-        generateAnswer(text);
-      }
     },
-    [generateAnswer, setIsListeningToInterviewer, setDeepgramSpeaking, setCurrentQuestion]
+    [setIsListeningToInterviewer, setDeepgramSpeaking]
   );
 
   const startInterview = useCallback(async () => {
@@ -222,6 +324,7 @@ export function useInterview() {
       onSegment: handleSegment,
       onSpeechEnd: handleSpeechEnd,
       onSpeechStarted: handleSpeechStarted,
+      onSpeechEnded: handleSpeechEnded,
       onOpen: () => setDeepgramConnected(true),
       onClose: () => {
         setDeepgramConnected(false);
@@ -232,7 +335,7 @@ export function useInterview() {
     await deepgramRef.current.start(stream);
     setListening(true);
     return { ok: true };
-  }, [handleSegment, handleSpeechEnd, handleSpeechStarted, setDeepgramConnected, setListening]);
+  }, [handleSegment, handleSpeechEnd, handleSpeechStarted, handleSpeechEnded, setDeepgramConnected, setListening]);
 
   const stopInterview = useCallback(() => {
     deepgramRef.current?.stop();
@@ -249,4 +352,15 @@ export function useInterview() {
   useEffect(() => () => stopInterview(), [stopInterview]);
 
   return { startInterview, stopInterview, generateAnswer, QUESTION_TYPE_LABELS };
+}
+
+// Heuristic: does a partial (still-streaming) transcript look like a finished
+// question? We start generating speculatively as soon as it does, so the answer
+// is ready by the time the interviewer stops talking.
+// - Must end with a question mark (allowing trailing quotes/punctuation).
+// - Must be long enough to be a real question (avoid firing on a lone "?").
+function looksLikeCompleteQuestion(text: string): boolean {
+  const t = text.trim();
+  if (t.length < 12) return false; // too short to be a meaningful question
+  return /[?？]["'”’)\]]?\s*$/.test(t);
 }

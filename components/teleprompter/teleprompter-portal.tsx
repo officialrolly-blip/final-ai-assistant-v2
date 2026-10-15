@@ -6,6 +6,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { Eye, EyeOff, Pause, Play, Type, GripVertical } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { useCopilotStore } from '@/lib/store';
+import { extractPartialString } from '@/lib/ai/client';
 import { useTheme } from '@/components/providers/theme-provider';
 
 function TeleprompterWindow({ children }: { children: React.ReactNode }) {
@@ -97,7 +98,7 @@ function Teleprompter() {
   const [visible, setVisible] = useState(false);
   const [paused, setPaused] = useState(false);
   const [pos, setPos] = useState({ x: 40, y: 80 });
-  const [size, setSize] = useState({ w: 420, h: 280 });
+  const [size, setSize] = useState({ w: 520, h: 340 });
   const [dragging, setDragging] = useState(false);
   const [resizing, setResizing] = useState(false);
   const [showControls, setShowControls] = useState(true);
@@ -105,8 +106,14 @@ function Teleprompter() {
   const resizeRef = useRef<{ sx: number; sy: number; ow: number; oh: number } | null>(null);
 
   const latestAssistant = [...turns].reverse().find((t) => t.role === 'assistant');
-  const displayText = currentAnswer || latestAssistant?.content || '';
   const latestAnswer = latestAssistant?.answer;
+  // While an answer is streaming, currentAnswer is raw JSON — extract the clean
+  // professional response so the teleprompter shows readable text in real time.
+  // Once finished, prefer the finalized professional response from the turn.
+  const streamingText = currentAnswer
+    ? (extractPartialString(currentAnswer, 'professionalResponse') || extractPartialString(currentAnswer, 'shortVersion'))
+    : '';
+  const displayText = streamingText || latestAnswer?.professionalResponse || latestAssistant?.content || '';
 
   const scrollRef = useRef<HTMLDivElement>(null);
   useEffect(() => {

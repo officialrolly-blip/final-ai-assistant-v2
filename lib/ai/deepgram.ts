@@ -37,9 +37,13 @@ export class DeepgramStream {
   }
 
   private async connect() {
+    // Nova-3 is Deepgram's latest real-time STT model (highest accuracy, lowest WER).
+    // This app only needs transcription (speech → text), so we use Nova-3 rather than
+    // Aura-2 (text → speech) or the Voice Agent API (two-way voice bots).
     const params = new URLSearchParams({
       model: 'nova-3',
-      smart_format: 'true',
+      language: 'en', // English interview; Nova-3's default. Use 'multi' for multilingual.
+      smart_format: 'true', // smart_format already includes punctuation/formatting.
       interim_results: 'true',
       endpointing: '350',
       utterance_end_ms: '1200',

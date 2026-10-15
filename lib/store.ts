@@ -56,7 +56,7 @@ interface CopilotState {
 const defaultSettings: Settings = {
   theme: 'dark',
   openRouterModel: 'auto',
-  teleprompterFontSize: 28,
+  teleprompterFontSize: 40, // bumped from 28 for readability
   teleprompterOpacity: 0.92,
   teleprompterAutoScroll: true,
   streamingSpeed: 40,
@@ -94,7 +94,7 @@ export const useCopilotStore = create<CopilotState>()(
       setCurrentAnswer: (a) => set({ currentAnswer: a }),
       setListening: (v) => set({ isListening: v }),
       setThinking: (v) => set({ isThinking: v }),
-      setIsListeningToInterviewer: (v) => set({ isListeningToInterviewer: v, listeningBuffer: v ? '' : '' }),
+      setIsListeningToInterviewer: (v) => set({ isListeningToInterviewer: v, listeningBuffer: '' }),
       setListeningBuffer: (buffer) => set({ listeningBuffer: buffer }),
       setDeepgramConnected: (v) => set({ deepgramConnected: v }),
       setDeepgramSpeaking: (v) => set({ deepgramSpeaking: v }),
@@ -104,6 +104,21 @@ export const useCopilotStore = create<CopilotState>()(
     }),
     {
       name: 'interview-copilot-v1',
+      version: 1,
+      migrate: (persistedState, version) => {
+        const state = persistedState as Partial<CopilotState> | undefined;
+        // Coming from the pre-v1 store (or no version): bump the teleprompter font
+        // up for anyone still on the old small default (<= 28px) so the larger,
+        // more readable size takes effect for existing users too.
+        if (
+          state?.settings &&
+          typeof state.settings.teleprompterFontSize === 'number' &&
+          state.settings.teleprompterFontSize <= 28
+        ) {
+          state.settings.teleprompterFontSize = defaultSettings.teleprompterFontSize;
+        }
+        return state as CopilotState;
+      },
       partialize: (s) => ({
         resume: s.resume,
         job: s.job,

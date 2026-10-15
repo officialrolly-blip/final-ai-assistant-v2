@@ -136,7 +136,7 @@ export default function AnalyzePage() {
 
           {/* ANALYSIS TAB */}
           <TabsContent value="analysis">
-            {loading === 'analysis' && !analysis ? (
+            {loading === 'analysis' ? (
               <LoadingCard label="Analyzing your resume against the job description…" />
             ) : analysis ? (
               <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="space-y-5">
@@ -168,8 +168,12 @@ export default function AnalyzePage() {
 
                 <div className="flex justify-end gap-3">
                   <Button variant="outline" onClick={runAnalysis}>Re-analyze</Button>
-                  <Button className="gap-2" onClick={() => { if (!prep) runPrep(); }}>
-                    Generate Interview Prep <ArrowRight className="h-4 w-4" />
+                  <Button className="gap-2" onClick={() => { if (!prep) runPrep(); }} disabled={loading === 'prep'}>
+                    {loading === 'prep' ? (
+                      <><Loader2 className="mr-2 h-4 w-4 animate-spin" /> Preparing…</>
+                    ) : (
+                      <>Generate Interview Prep <ArrowRight className="h-4 w-4" /></>
+                    )}
                   </Button>
                 </div>
               </motion.div>

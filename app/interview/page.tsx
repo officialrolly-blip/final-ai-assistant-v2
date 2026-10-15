@@ -13,6 +13,7 @@ import { Badge } from '@/components/ui/badge';
 import { Progress } from '@/components/ui/progress';
 import { useCopilotStore } from '@/lib/store';
 import { useInterview } from '@/hooks/use-interview';
+import { extractPartialString } from '@/lib/ai/client';
 import type { AIAnswer, ConversationTurn } from '@/lib/types';
 
 export default function InterviewPage() {
@@ -45,7 +46,7 @@ export default function InterviewPage() {
 
   useEffect(() => {
     transcriptEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [store.turns]);
+  }, [store.turns, store.listeningBuffer]);
 
   useEffect(() => {
     answerEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -135,7 +136,7 @@ export default function InterviewPage() {
             </h2>
           </div>
                     <div className="scrollbar-thin min-h-0 flex-1 overflow-y-auto px-6 pb-6">
-            {interviewerTurns.length === 0 && !store.currentQuestion ? (
+            {interviewerTurns.length === 0 && !store.currentQuestion && !store.listeningBuffer ? (
               <div className="flex h-full flex-col items-center justify-center text-center text-muted-foreground">
                 <div className="mb-4 flex h-16 w-16 items-center justify-center rounded-full bg-primary/10">
                   <Radio className="h-8 w-8 text-primary" />
@@ -151,14 +152,14 @@ export default function InterviewPage() {
                   ))}
                 </AnimatePresence>
                 
-                {/* Live transcription while interviewer is speaking */}
-                {store.isListeningToInterviewer && store.currentQuestion && (
+                {/* Live transcription while interviewer is speaking — streams word-by-word in real time */}
+                {store.listeningBuffer && (
                   <div className="rounded-2xl bg-muted px-4 py-3">
                     <div className="mb-1 flex items-center gap-2">
                       <span className="text-xs font-semibold text-muted-foreground">Interviewer</span>
                       <span className="text-xs text-muted-foreground/60">(Listening...)</span>
                     </div>
-                    <p className="leading-relaxed">{store.currentQuestion}</p>
+                    <p className="leading-relaxed">{store.listeningBuffer}</p>
                   </div>
                 )}
                 
@@ -278,7 +279,10 @@ export default function InterviewPage() {
                         </CardTitle>
                       </CardHeader>
                       <CardContent>
-                        <p className="whitespace-pre-wrap text-sm leading-relaxed">{store.currentAnswer}</p>
+                        <p className="whitespace-pre-wrap text-sm leading-relaxed">
+                          {extractPartialString(store.currentAnswer, 'professionalResponse') || extractPartialString(store.currentAnswer, 'shortVersion')}
+                          <span className="ml-0.5 inline-block animate-pulse">▍</span>
+                        </p>
                       </CardContent>
                     </Card>
                   </div>
