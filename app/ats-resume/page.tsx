@@ -173,49 +173,167 @@ export default function ATSResumePage() {
     try {
       const { PDFDocument, StandardFonts, rgb } = await import('pdf-lib');
       const doc = await PDFDocument.create();
-      const font = await doc.embedFont(StandardFonts.Helvetica);
+      const Helvetica = await doc.embedFont(StandardFonts.Helvetica);
+      const HelveticaBold = await doc.embedFont(StandardFonts.HelveticaBold);
+      type PDFFont = (typeof Helvetica) | (typeof HelveticaBold);
+
+      const sanitizeForPdf = (text: string): string =>
+        text
+          .replace(/[“”„‟]/g, '"')
+          .replace(/[‘’‚‛]/g, "'")
+          .replace(/[–—―]/g, '-')
+          .replace(/[•◦▪‣⁃]/g, '-')
+          .replace(/…/g, '...')
+          .replace(/[→←↔⇒⇐]/g, '->')
+          .replace(/[✓✔☑]/g, 'x')
+          .replace(/[★☆]/g, '*')
+          .replace(/[©®™]/g, '')
+          .replace(/[\u2000-\u206F]/g, ' ')
+          .replace(/[\u2500-\u259F\u25A0-\u25FF]/g, '')
+          .replace(/[^\x09\x0A\x0D\x20-\x7E\xA0-\xFF]/g, '');
+
+      const stripMarkdown = (text: string): string =>
+        text
+          .replace(/[*_]{1,3}/g, '')
+          .replace(/^#{1,6}\s+/gm, '')
+          .replace(/`([^`]*)`/g, '$1')
+          .replace(/^>\s?/gm, '')
+          .trim();
+
       const margin = 50;
       const fontSize = 11;
       const lineHeight = fontSize * 1.4;
       const pageWidth = 612;
       const pageHeight = 792;
 
-      let page = doc.addPage([pageWidth, pageHeight]);
+      const page = doc.addPage([pageWidth, pageHeight]);
       let y = pageHeight - margin;
-      const lines = content.split(/\r?\n/).flatMap((line) => {
-        const words = line.trim().split(/\s+/);
-        const maxWidth = pageWidth - margin * 2;
+      const ATS_HEADINGS = new Set([
+        'SUMMARY', 'EXPERIENCE', 'EDUCATION', 'SKILLS',
+        'PROJECTS', 'CERTIFICATIONS', 'ACHIEVEMENTS',
+      ]);
+      type AtsLine = { kind: string; text: string };
+      const parseLines = (rawText: string): AtsLine[] => {
+        const out: AtsLine[] = [];
+        let seenName = false;
+        let seenContact = false;
+        const clean = sanitizeForPdf(rawText).replace(/\r\n?/g, '\n');
+        for (const rawLine of clean.split('\n')) {
+          const stripped = stripMarkdown(rawLine);
+          if (!stripped) {
+            if (out.length > 0 && out[out.length - 1]?.kind !== 'blank') out.push({ kind: 'blank', text: '' });
+            continue;
+          }
+          if (!seenName) { seenName = true; out.push({ kind: 'name', text: stripped }); continue; }
+          if (!seenContact) { seenContact = true; out.push({ kind: 'contact', text: stripped }); continue; }
+          const upper = stripped.toUpperCase().replace(/[:\s]+$/, '');
+          if (ATS_HEADINGS.has(upper) && stripped.length <= 20) { out.push({ kind: 'heading', text: upper }); continue; }
+          const bullet = stripped.replace(/^[-*o]\s+/, '');
+          if (bullet !== stripped) { out.push({ kind: 'bullet', text: bullet }); continue; }
+          out.push({ kind: 'body', text: stripped });
+        }
+        while (out.length > 0 && out[out.length - 1]?.kind === 'blank') out.pop();
+        return out;
+      };
+
+      const atsLines = parseLines(content);
+
+      const formatAndDrawText = (text: string, x: number, size: number, f: PDFFont, gap: number) => {
+        const maxW = pageWidth - margin - x;
+        const words = text.split(/\s+/).filter(Boolean);
         const wrapped: string[] = [];
-        let current = '';
-        for (const word of words) {
-          const candidate = current ? `${current} ${word}` : word;
-          const textWidth = font.widthOfTextAtSize(candidate, fontSize);
-          if (textWidth > maxWidth && current) {
-            wrapped.push(current);
-            current = word;
+        let cur = '';
+        for (const w of words) {
+          const trial = cur ? `${cur} ${w}` : w;
+          if (f.widthOfTextAtSize(trial, size) > maxW && cur) {
+            wrapped.push(cur);
+            cur = w;
           } else {
-            current = candidate;
+            cur = trial;
           }
         }
-        if (current) wrapped.push(current);
-        return wrapped.length ? wrapped : [''];
-      });
+        if (cur) wrapped.push(cur);
+        for (const ln of wrapped.length > 0 ? wrapped : [' ']) {
+          if (y - size < margin) {
+            const newPage = doc.addPage([pageWidth, pageHeight]);
+            y = pageHeight - margin;
+          }
+          page.drawText(ln, { x, y: y - size, size, font: f, color: rgb(0.07, 0.07, 0.07) });
+          y -= gap;
+        }
+      };
 
-      for (const line of lines) {
-        if (y < margin + lineHeight) {
-          page = doc.addPage([pageWidth, pageHeight]);
+      const drawHeadingLine = (text: string) => {
+        y -= 4;
+        if (y - 22 < margin) {
+          const newPage = doc.addPage([pageWidth, pageHeight]);
           y = pageHeight - margin;
         }
-        page.drawText(line, {
-          x: margin,
-          y: y - fontSize,
-          size: fontSize,
-          font,
-          color: rgb(0.07, 0.07, 0.07),
-          lineHeight,
-          maxWidth: pageWidth - margin * 2,
-        });
-        y -= lineHeight;
+        page.drawText(text, { x: margin, y: y - 12, size: 12, font: HelveticaBold, color: rgb(0.07, 0.07, 0.07) });
+        y -= 14;
+        page.drawLine({ start: { x: margin, y }, end: { x: pageWidth - margin, y }, thickness: 0.75, color: rgb(0.7, 0.7, 0.7) });
+        y -= 8;
+      };
+
+      const drawBulletLine = (text: string, boldPrefix: string, x: number, size: number, f: PDFFont, gap: number) => {
+        const maxW = pageWidth - margin - x;
+        const words = text.split(/\s+/).filter(Boolean);
+        const wrapped: string[] = [];
+        let cur = '';
+        for (const w of words) {
+          const trial = cur ? `${cur} ${w}` : w;
+          if (f.widthOfTextAtSize(trial, size) > maxW && cur) {
+            wrapped.push(cur);
+            cur = w;
+          } else {
+            cur = trial;
+          }
+        }
+        if (cur) wrapped.push(cur);
+        for (const ln of wrapped.length > 0 ? wrapped : [' ']) {
+          if (y - size < margin) {
+            const newPage = doc.addPage([pageWidth, pageHeight]);
+            y = pageHeight - margin;
+          }
+          page.drawText(boldPrefix, { x: margin + 8, y: y - size, size, font: f, color: rgb(0.07, 0.07, 0.07) });
+          page.drawText(ln, { x: margin + 16, y: y - size, size, font: f, color: rgb(0.07, 0.07, 0.07) });
+          y -= gap;
+        }
+      };
+
+      for (const l of atsLines) {
+        if (l.kind === 'blank') { y -= 6; continue; }
+        if (l.kind === 'name') { formatAndDrawText(l.text, margin, 18, HelveticaBold, 22); y -= 2; continue; }
+        if (l.kind === 'contact') { formatAndDrawText(l.text, margin, 9.5, Helvetica, 13); y -= 4; continue; }
+        if (l.kind === 'heading') {
+          drawHeadingLine(l.text);
+          continue;
+        }
+        if (l.kind === 'bullet') {
+          const bx = margin + 12;
+          const maxW = pageWidth - margin - bx;
+          const words = l.text.split(/\s+/).filter(Boolean);
+          const blines: string[] = [];
+          let cur = '';
+          for (const w of words) {
+            const trial = cur ? `${cur} ${w}` : w;
+            if (Helvetica.widthOfTextAtSize(trial, fontSize) > maxW && cur) { blines.push(cur); cur = w; }
+            else { cur = trial; }
+          }
+          if (cur) blines.push(cur);
+          blines.forEach((ln, idx) => {
+            if (y - fontSize < margin) {
+              const newPage = doc.addPage([pageWidth, pageHeight]);
+              y = pageHeight - margin;
+            }
+            const tagLine = (l.text.match(/^- /) ?? [])[0] ?? '';
+            const tagText = l.text.slice(tagLine.length);
+            drawBulletLine(tagText, tagLine, bx, fontSize, Helvetica, lineHeight);
+          });
+          continue;
+        }
+        const isRole = /\(\d{4}.*(present|current|\d{4}).*\)/i.test(l.text);
+        formatAndDrawText(l.text, margin, fontSize, isRole ? HelveticaBold : Helvetica, lineHeight);
       }
 
       const pdfBytes = await doc.save();

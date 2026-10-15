@@ -59,11 +59,17 @@ Return ONLY this JSON structure (starting with { and ending with }):
 }
 
 Generate 3-5 questions per category (keep answers concise). Make answers specific to the candidate's resume. Each "type" must be one of: behavioral, technical, situational, leadership, culture_fit, problem_solving, salary, strength, weakness, follow_up, general.`,
-  'generate-ats-resume': `You are an expert ATS resume writer. Rewrite the provided resume into a polished, recruiter-friendly, ATS-compatible resume. Keep the candidate's experience, achievements, and skills intact. Use a clean structured format with clear headings, concise bullet points, quantifiable impact statements, and strong keywords. Do not include markdown fences or any explanation. Return ONLY valid JSON with this exact schema:
+  'generate-ats-resume': `You are an expert ATS resume writer. Rewrite the provided resume into a polished, recruiter-friendly, ATS-compatible resume. Keep the candidate's experience, achievements, and skills intact. Use a clean structured format with clear headings, concise bullet points, quantifiable impact statements, and strong keywords. Do not include markdown fences or any explanation. Use PLAIN TEXT ONLY inside improvedResume (no "#", no "**", no backticks). Structure it as ATS format: Line 1 FULL NAME, Line 2 contact line "Email | Phone | Location | LinkedIn", then sections with ALL-CAPS headings on their own lines (SUMMARY, EXPERIENCE, EDUCATION, SKILLS, PROJECTS, CERTIFICATIONS, ACHIEVEMENTS), role lines as "Job Title - Company, Location (Start - End)", bullets starting with "- ", plain ASCII punctuation only. Return ONLY valid JSON with this exact schema:
 {
-  "improvedResume": string,
-  "notes": string
+  "improvedResume": string (the full ATS-ready resume as PLAIN TEXT ONLY),
+  "notes": string (brief summary of the improvements made)
 }
+ATS FORMAT RULES for improvedResume (follow exactly):
+- PLAIN TEXT ONLY: no markdown, no "#", no "**", no "*", no backticks, no code fences.
+- Line 1: FULL NAME. Line 2: contact line "Email | Phone | Location | LinkedIn".
+- Sections in order, each heading ALL CAPS on its own line (only: SUMMARY, EXPERIENCE, EDUCATION, SKILLS, PROJECTS, CERTIFICATIONS, ACHIEVEMENTS), blank line before each heading.
+- Under EXPERIENCE: one line per role "Job Title - Company, Location (Start - End)", then bullet lines starting with "- " for achievements.
+- Bullets start with "- " (hyphen + space). Use only plain ASCII punctuation (no smart quotes, em dashes, arrows, checkmarks, emoji).
 Output ONLY the JSON object, starting with { and ending with }.`,
   'answer-question': `You are an expert interview coach helping a candidate during a LIVE interview. Given the interviewer's question, the conversation history, the candidate's resume, and the job context, generate an instant, professional answer.
 
