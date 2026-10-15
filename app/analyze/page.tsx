@@ -127,7 +127,7 @@ export default function AnalyzePage() {
           </div>
         )}
 
-        <Tabs defaultValue="analysis">
+        <Tabs value={activeTab} onValueChange={setActiveTab}>
           <TabsList className="mb-6">
             <TabsTrigger value="analysis" className="gap-1.5">
               <FileText className="h-4 w-4" /> Analysis
