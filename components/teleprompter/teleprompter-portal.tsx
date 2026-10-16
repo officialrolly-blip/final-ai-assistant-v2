@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { motion, AnimatePresence } from 'framer-motion';
-import { Eye, EyeOff, Pause, Play, Type, GripVertical } from 'lucide-react';
+import { Eye, EyeOff, Pause, Play, GripVertical, Minus, Plus } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { useCopilotStore } from '@/lib/store';
 import { extractPartialString } from '@/lib/ai/client';
@@ -104,6 +104,8 @@ function Teleprompter() {
   const [showControls, setShowControls] = useState(true);
   const dragRef = useRef<{ sx: number; sy: number; ox: number; oy: number } | null>(null);
   const resizeRef = useRef<{ sx: number; sy: number; ow: number; oh: number } | null>(null);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const userScrolledAway = useRef(false);
 
   const latestAssistant = [...turns].reverse().find((t) => t.role === 'assistant');
   const latestAnswer = latestAssistant?.answer;
@@ -116,11 +118,28 @@ function Teleprompter() {
   const displayText = streamingText || latestAnswer?.professionalResponse || latestAssistant?.content || '';
 
   const scrollRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (paused || !scrollRef.current) return;
+
+  // Remember when the reader scrolls up so streaming doesn't yank them back down.
+  const handleScroll = useCallback(() => {
     const el = scrollRef.current;
+    if (!el) return;
+    userScrolledAway.current = el.scrollHeight - el.scrollTop - el.clientHeight > 48;
+  }, []);
+
+  // Follow new text only when auto-scroll is enabled, playback isn't paused,
+  // and the user hasn't scrolled away from the bottom on their own.
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el || paused || !settings.teleprompterAutoScroll || userScrolledAway.current) return;
     el.scrollTop = el.scrollHeight;
   }, [displayText, paused, settings.teleprompterAutoScroll]);
+
+  // Toggling auto-scroll back on re-anchors to the latest line.
+  useEffect(() => {
+    if (!settings.teleprompterAutoScroll) return;
+    userScrolledAway.current = false;
+    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' });
+  }, [settings.teleprompterAutoScroll]);
 
   useEffect(() => {
     if (displayText) setVisible(true);
@@ -164,21 +183,24 @@ function Teleprompter() {
 
   const toggleVisible = useCallback(() => setVisible((v) => !v), []);
   useEffect(() => {
+    // Listen on the window that actually hosts the teleprompter (the popup
+    // window when open) so shortcuts work while the popup is focused.
+    const win = rootRef.current?.ownerDocument.defaultView;
+    if (!win) return;
     const handler = (e: KeyboardEvent) => {
       if (e.ctrlKey && e.key === 't') { e.preventDefault(); toggleVisible(); }
       else if (e.key === ' ' && visible) { e.preventDefault(); setPaused((p) => !p); }
       else if (e.ctrlKey && e.key === 'ArrowUp') { e.preventDefault(); update({ teleprompterFontSize: Math.min(48, settings.teleprompterFontSize + 2) }); }
       else if (e.ctrlKey && e.key === 'ArrowDown') { e.preventDefault(); update({ teleprompterFontSize: Math.max(16, settings.teleprompterFontSize - 2) }); }
     };
-    window.addEventListener('keydown', handler);
-    return () => window.removeEventListener('keydown', handler);
+    win.addEventListener('keydown', handler);
+    return () => win.removeEventListener('keydown', handler);
   }, [visible, toggleVisible, update, settings.teleprompterFontSize]);
 
-  const bgOpacity = settings.teleprompterOpacity;
   const isDark = theme === 'dark';
 
   return (
-    <>
+    <div ref={rootRef}>
       <AnimatePresence>
         {!visible && (
           <motion.button
@@ -197,85 +219,123 @@ function Teleprompter() {
       <AnimatePresence>
         {visible && (
           <motion.div
-            initial={{ opacity: 0, scale: 0.9 }}
+            initial={{ opacity: 0, scale: 0.95 }}
             animate={{ opacity: 1, scale: 1 }}
-            exit={{ opacity: 0, scale: 0.9 }}
+            exit={{ opacity: 0, scale: 0.95 }}
             style={{
               left: pos.x,
               top: pos.y,
               width: size.w,
               height: size.h,
-              opacity: bgOpacity,
             }}
-            className="fixed z-[9999] flex flex-col overflow-hidden rounded-2xl border shadow-2xl backdrop-blur-2xl"
+            className="fixed z-[9999] flex flex-col"
+            onMouseEnter={() => setShowControls(true)}
+            onMouseLeave={() => setShowControls(false)}
           >
-            <div className={`absolute inset-0 ${isDark ? 'bg-zinc-900' : 'bg-white'}`} />
-            <div className="relative flex h-full flex-col">
+            {/* Backdrop scrim only — the opacity setting dims this, never the text. */}
+            <div
+              onMouseDown={(e) => {
+                setDragging(true);
+                dragRef.current = { sx: e.clientX, sy: e.clientY, ox: pos.x, oy: pos.y };
+              }}
+              className="absolute inset-0"
+              style={{
+                backgroundColor: isDark ? 'rgba(0,0,0,0.9)' : 'rgba(255,255,255,0.9)',
+                opacity: settings.teleprompterOpacity,
+              }}
+            />
+
+            {/* Floating controls — appear on hover instead of a boxed header. */}
+            <div
+              className={`absolute left-1/2 top-0 z-20 -translate-x-1/2 transition-opacity duration-200 ${
+                showControls ? 'opacity-100' : 'pointer-events-none opacity-0'
+              }`}
+            >
               <div
                 onMouseDown={(e) => {
                   setDragging(true);
                   dragRef.current = { sx: e.clientX, sy: e.clientY, ox: pos.x, oy: pos.y };
                 }}
-                onMouseEnter={() => setShowControls(true)}
-                className={`flex shrink-0 cursor-move items-center gap-2 border-b px-3 py-2 ${
-                  isDark ? 'border-white/10 bg-white/5' : 'border-black/5 bg-black/5'
+                className={`mt-2 flex cursor-move items-center gap-1 rounded-full border px-2 py-1 shadow-lg backdrop-blur-xl ${
+                  isDark ? 'border-white/10 bg-black/60 text-zinc-100' : 'border-black/10 bg-white/80 text-zinc-900'
                 }`}
               >
                 <GripVertical className="h-4 w-4 opacity-40" />
-                <span className="text-xs font-semibold">Teleprompter</span>
                 {latestAnswer && (
                   <span className="rounded-full bg-primary/20 px-1.5 py-0.5 text-[10px] font-medium text-primary capitalize">
                     {latestAnswer.questionType}
                   </span>
                 )}
-                <div className="ml-auto flex items-center gap-1">
-                  <Button
-                    variant="ghost" size="icon" className="h-7 w-7"
-                    onClick={() => setPaused((p) => !p)}
-                    title={paused ? 'Play (Space)' : 'Pause (Space)'}
-                  >
-                    {paused ? <Play className="h-3.5 w-3.5" /> : <Pause className="h-3.5 w-3.5" />}
-                  </Button>
-                  <Button
-                    variant="ghost" size="icon" className="h-7 w-7"
-                    onClick={() => update({ teleprompterFontSize: Math.min(48, settings.teleprompterFontSize + 2) })}
-                    title="Increase font (Ctrl+↑)"
-                  >
-                    <Type className="h-3.5 w-3.5" />
-                  </Button>
-                  <Button
-                    variant="ghost" size="icon" className="h-7 w-7"
-                    onClick={() => setVisible(false)}
-                    title="Hide (Ctrl+T)"
-                  >
-                    <EyeOff className="h-3.5 w-3.5" />
-                  </Button>
-                </div>
-              </div>
-              <div
-                ref={scrollRef}
-                onMouseEnter={() => setShowControls(true)}
-                onMouseLeave={() => setShowControls(false)}
-                className="scrollbar-thin min-h-0 flex-1 overflow-y-auto px-4 py-3"
-              >
-                {displayText ? (
-                  <p
-                    style={{ fontSize: `${settings.teleprompterFontSize}px`, lineHeight: 1.5 }}
-                    className={`font-medium ${isDark ? 'text-zinc-100' : 'text-zinc-900'}`}
-                  >
-                    {displayText}
-                    {paused && <span className="ml-1 text-xs text-amber-500">[paused]</span>}
-                  </p>
-                ) : (
-                  <p className={`text-sm ${isDark ? 'text-zinc-500' : 'text-zinc-400'}`}>
-                    Waiting for the interviewer&apos;s question…
-                  </p>
-                )}
+                <Button
+                  variant="ghost" size="icon" className="h-7 w-7"
+                  onClick={() => setPaused((p) => !p)}
+                  title={paused ? 'Play (Space)' : 'Pause (Space)'}
+                >
+                  {paused ? <Play className="h-3.5 w-3.5" /> : <Pause className="h-3.5 w-3.5" />}
+                </Button>
+                <Button
+                  variant="ghost" size="icon" className="h-7 w-7"
+                  onClick={() => update({ teleprompterFontSize: Math.max(16, settings.teleprompterFontSize - 2) })}
+                  title="Decrease font (Ctrl+↓)"
+                >
+                  <Minus className="h-3.5 w-3.5" />
+                </Button>
+                <Button
+                  variant="ghost" size="icon" className="h-7 w-7"
+                  onClick={() => update({ teleprompterFontSize: Math.min(48, settings.teleprompterFontSize + 2) })}
+                  title="Increase font (Ctrl+↑)"
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                </Button>
+                <Button
+                  variant="ghost" size="icon" className="h-7 w-7"
+                  onClick={() => setVisible(false)}
+                  title="Hide (Ctrl+T)"
+                >
+                  <EyeOff className="h-3.5 w-3.5" />
+                </Button>
               </div>
             </div>
+
+            <div
+              ref={scrollRef}
+              onScroll={handleScroll}
+              className="relative min-h-0 flex-1 overflow-y-auto px-6 pb-8 pt-12"
+            >
+              {displayText ? (
+                <p
+                  style={{
+                    fontSize: `${settings.teleprompterFontSize}px`,
+                    lineHeight: 1.5,
+                    textShadow: isDark
+                      ? '0 1px 4px rgba(0,0,0,0.85)'
+                      : '0 1px 4px rgba(255,255,255,0.85)',
+                  }}
+                  className={`font-medium ${isDark ? 'text-zinc-50' : 'text-zinc-900'}`}
+                >
+                  {displayText}
+                  {paused && <span className="ml-2 text-xs text-amber-500">[paused]</span>}
+                </p>
+              ) : (
+                <p className={`text-sm ${isDark ? 'text-zinc-400' : 'text-zinc-500'}`}>
+                  Waiting for the interviewer&apos;s question…
+                </p>
+              )}
+            </div>
+
+            {/* Resize grip */}
+            <div
+              onMouseDown={(e) => {
+                setResizing(true);
+                resizeRef.current = { sx: e.clientX, sy: e.clientY, ow: size.w, oh: size.h };
+              }}
+              className={`absolute bottom-0 right-0 z-20 h-5 w-5 cursor-nwse-resize border-b-2 border-r-2 ${
+                isDark ? 'border-white/20' : 'border-black/20'
+              }`}
+            />
           </motion.div>
         )}
       </AnimatePresence>
-    </>
+    </div>
   );
 }

@@ -110,8 +110,11 @@ export const useCopilotStore = create<CopilotState>()(
         const state = persistedState as Partial<CopilotState> | undefined;
         // Coming from the pre-v1 store (or no version): bump the teleprompter font
         // up for anyone still on the old small default (<= 28px) so the larger,
-        // more readable size takes effect for existing users too.
+        // more readable size takes effect for existing users too. Gated on the
+        // stored version so a font size the user deliberately picked after
+        // upgrading is never stomped back to the default.
         if (
+          version < 4 &&
           state?.settings &&
           typeof state.settings.teleprompterFontSize === 'number' &&
           state.settings.teleprompterFontSize <= 28
