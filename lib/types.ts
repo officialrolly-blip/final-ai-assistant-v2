@@ -102,6 +102,8 @@ export interface AIAnswer {
   speakingTimeEstimate: string;
   confidenceScore: number;
   questionType: QuestionType;
+  /** True when the question was small talk / off-topic (not role or resume related). */
+  isAdlib?: boolean;
 }
 
 export type ThemeMode = 'dark' | 'light';

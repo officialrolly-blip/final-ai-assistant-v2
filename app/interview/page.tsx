@@ -300,6 +300,11 @@ export default function InterviewPage() {
 
 function TurnBubble({ turn }: { turn: ConversationTurn }) {
   const isInterviewer = turn.role === 'interviewer';
+  // Assistant turns store the QUESTION in `content` and the answer separately —
+  // show what the AI coach actually suggested so the transcript reads like a
+  // real back-and-forth conversation instead of the question twice.
+  const coachText =
+    turn.answer?.shortVersion?.trim() || turn.answer?.professionalResponse?.trim() || turn.content;
   return (
     <motion.div
       initial={{ opacity: 0, y: 8 }}
@@ -315,17 +320,31 @@ function TurnBubble({ turn }: { turn: ConversationTurn }) {
           <span className="text-xs font-semibold text-muted-foreground">
             {isInterviewer ? 'Interviewer' : 'AI Coach'}
           </span>
+          {!isInterviewer && turn.answer?.isAdlib && (
+            <Badge variant="outline" className="h-4 px-1.5 text-[10px]">ad-lib</Badge>
+          )}
           {turn.questionType && turn.questionType !== 'general' && (
             <Badge variant="outline" className="h-4 px-1.5 text-[10px] capitalize">{turn.questionType}</Badge>
           )}
         </div>
-        <p className="leading-relaxed">{turn.content}</p>
+        <p className="leading-relaxed">{isInterviewer ? turn.content : coachText}</p>
       </div>
     </motion.div>
   );
 }
 
 function AnswerView({ answer }: { answer: AIAnswer }) {
+  // Redundancy guards: hide variants that duplicate (or are contained in) the
+  // main response instead of showing the same words 2-3 times.
+  const norm = (s: string | undefined) =>
+    (s ?? '').trim().toLowerCase().replace(/\s+/g, ' ');
+  const pro = norm(answer.professionalResponse);
+  const shortV = answer.shortVersion?.trim();
+  const expandedV = answer.expandedVersion?.trim();
+  const showShort = Boolean(shortV) && norm(shortV) !== pro && !pro.includes(norm(shortV));
+  const showExpanded =
+    Boolean(expandedV) && norm(expandedV) !== pro && !pro.includes(norm(expandedV));
+
   return (
     <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="space-y-4">
       {/* Confidence + time */}
@@ -340,6 +359,9 @@ function AnswerView({ answer }: { answer: AIAnswer }) {
           <Clock className="h-4 w-4 text-muted-foreground" />
           <span className="text-xs text-muted-foreground">{answer.speakingTimeEstimate}</span>
         </div>
+        {answer.isAdlib && (
+          <Badge variant="outline" className="text-xs text-primary">Ad-lib · off-script</Badge>
+        )}
         <Badge variant="secondary" className="ml-auto capitalize">{answer.questionType}</Badge>
       </div>
 
@@ -350,10 +372,12 @@ function AnswerView({ answer }: { answer: AIAnswer }) {
       </Card>
 
       {/* Short version */}
-      <Card className="glass border-0 shadow-lg">
-        <CardHeader className="pb-2"><CardTitle className="text-sm">Short Version</CardTitle></CardHeader>
-        <CardContent><p className="text-sm leading-relaxed text-muted-foreground">{answer.shortVersion}</p></CardContent>
-      </Card>
+      {showShort && (
+        <Card className="glass border-0 shadow-lg">
+          <CardHeader className="pb-2"><CardTitle className="text-sm">Short Version</CardTitle></CardHeader>
+          <CardContent><p className="text-sm leading-relaxed text-muted-foreground">{answer.shortVersion}</p></CardContent>
+        </Card>
+      )}
 
       {/* STAR */}
       {answer.starResponse && (
@@ -409,7 +433,7 @@ function AnswerView({ answer }: { answer: AIAnswer }) {
       )}
 
       {/* Expanded */}
-      {answer.expandedVersion && answer.expandedVersion !== answer.professionalResponse && (
+      {showExpanded && (
         <Card className="glass border-0 shadow-lg">
           <CardHeader className="pb-2"><CardTitle className="text-sm">Expanded Version</CardTitle></CardHeader>
           <CardContent><p className="text-sm leading-relaxed text-muted-foreground">{answer.expandedVersion}</p></CardContent>

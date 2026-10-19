@@ -115,7 +115,12 @@ function Teleprompter() {
   const streamingText = currentAnswer
     ? (extractPartialString(currentAnswer, 'professionalResponse') || extractPartialString(currentAnswer, 'shortVersion'))
     : '';
-  const displayText = streamingText || latestAnswer?.professionalResponse || latestAssistant?.content || '';
+  const displayText =
+    streamingText ||
+    latestAnswer?.professionalResponse ||
+    latestAnswer?.shortVersion ||
+    latestAssistant?.content ||
+    '';
 
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -261,6 +266,11 @@ function Teleprompter() {
                 }`}
               >
                 <GripVertical className="h-4 w-4 opacity-40" />
+                {latestAnswer?.isAdlib && (
+                  <span className="rounded-full bg-primary/20 px-1.5 py-0.5 text-[10px] font-medium text-primary">
+                    ad-lib
+                  </span>
+                )}
                 {latestAnswer && (
                   <span className="rounded-full bg-primary/20 px-1.5 py-0.5 text-[10px] font-medium text-primary capitalize">
                     {latestAnswer.questionType}

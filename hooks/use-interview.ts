@@ -83,13 +83,27 @@ export function useInterview() {
         content: `JOB: ${job.role} at ${job.company} (${job.interviewType})\nDESCRIPTION:\n${job.description.slice(0, 2000)}`,
       });
     }
-    // Conversation memory: last 8 turns
-    const recent = turns.slice(-8);
+    // Conversation memory: rebuild natural Q&A pairs from recent turns.
+    // - Consecutive interviewer segments (Deepgram finalizes a question in
+    //   pieces) are merged into ONE question instead of several fragments.
+    // - Assistant turns store the QUESTION in `content` and the suggested
+    //   answer in `answer` — so send the actual suggested answer here. Sending
+    //   the question as "what the candidate said" made the model repeat itself.
+    const recent = turns.slice(-12);
     for (const t of recent) {
-      sys.push({
-        role: t.role === 'interviewer' ? 'user' : 'assistant',
-        content: t.role === 'interviewer' ? `Interviewer: ${t.content}` : `Candidate (suggested): ${t.content}`,
-      });
+      if (t.role === 'interviewer') {
+        const prev = sys[sys.length - 1];
+        if (prev && prev.role === 'user') {
+          // Merge into the previous interviewer fragment (single question).
+          prev.content += ' ' + t.content;
+        } else {
+          sys.push({ role: 'user', content: `Interviewer: ${t.content}` });
+        }
+      } else {
+        const said =
+          t.answer?.professionalResponse?.trim() || t.answer?.shortVersion?.trim() || t.content;
+        sys.push({ role: 'assistant', content: `You (candidate, suggested): ${said}` });
+      }
     }
     return sys;
   }, []);
@@ -136,7 +150,7 @@ export function useInterview() {
           try {
             const messages = [
               ...buildContextMessages(),
-              { role: 'user' as const, content: `Interviewer asks: "${q}"\n\nGenerate the answer now.` },
+              { role: 'user' as const, content: `Interviewer asks: "${q}"\n\nWrite the spoken answer now — conversational, first person, no repetition.` },
             ];
             const res = await streamChat({
               task: 'answer-question',
